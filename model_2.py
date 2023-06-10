@@ -48,7 +48,7 @@ def z_given_uy(u,y,rbm):
     p_z = 1/(1+torch.exp(-temp))
     return p_z
 
-
+@torch.no_grad()
 def sample(y,u,rbm,dataset,k=1,MODEL = "TRBM"):
   
   ## p_y, p_z, p_u represents means of probability distribution
@@ -120,13 +120,10 @@ def predict(train_data,z_dim,rbm):
   
   loss_list = np.array(loss_list)
   loss_0thOrder_list = np.array(loss_0thOrder_list)
-  print(loss_list.mean(),loss_0thOrder_list.mean())
+  print("model loss = ",loss_list.mean(),"0th Order Model loss =",loss_0thOrder_list.mean())
   return loss_list.mean()
     
     
-        
-          
-      
     
 def Energy(u,y,z,rbm):
 
