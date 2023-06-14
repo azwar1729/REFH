@@ -23,8 +23,9 @@ class RBM(nn.Module):
         self.W_uz = nn.Parameter(torch.randn(z_dim,u_dim)*1e-2)
 
         self.b_y = nn.Parameter(torch.zeros(y_dim))
-        self.b_u = nn.Parameter(torch.zeros(u_dim))
+        #self.b_u = nn.Parameter(torch.zeros(u_dim))
         self.b_z = nn.Parameter(torch.zeros(z_dim))
+
 
 
 
@@ -45,7 +46,8 @@ def u_given_z(z,rbm):
 
 def z_given_uy(u,y,rbm):
     temp = torch.einsum("ij,bj->bi",[rbm.W_yz,y]) + torch.einsum("ij,bj->bi",[rbm.W_uz,u]) + rbm.b_z
-    p_z = 1/(1+torch.exp(-temp))
+    #p_z = 1/(1+torch.exp(-temp))
+    p_z = torch.sigmoid(temp)
     return p_z
 
 @torch.no_grad()
@@ -81,54 +83,57 @@ def sample(y,u,rbm,dataset,k=1,MODEL = "TRBM"):
 
   return y_0,u_0,z_0,y,u,p_z,p_z_0
 
+
 def clamped_sampling(y,u,rbm,k=1):
-  
   p_z_0 = z_given_uy(u,y,rbm)
-  z = torch.bernoulli(p_z_0)
+  #z = torch.bernoulli(p_z_0)
+  z = p_z_0
   diff  = 0 
   for _ in range(k):
 
     p_y = y_given_z(z,rbm)
-    y_1 = torch.bernoulli(p_y)
-
+    #y_1 = torch.bernoulli(p_y)
+    y_1 = p_y
     diff = ((y - y_1)).sum(axis=1).mean()
     #print("diff = ",diff)
     y = y_1
     p_z = z_given_uy(u,y,rbm)
-    z = torch.bernoulli(p_z)
+    #z = torch.bernoulli(p_z)
+    z = p_z
    
   return p_y
 
 def predict(train_data,z_dim,rbm):
 
-  T = len(train_data[0])
+  T = 100
   loss_list = []
   loss_0thOrder_list = []
+  recon = []
   for t in range(T-1):
     data_t = train_data[:,t]
-    if t>=1:  
-      u_data_t = suf_z  
+    if t==0:
+      suf_z_prev = torch.zeros(data_t.shape[0],z_dim).cuda()
     else:
-      u_data_t = torch.zeros(data_t.shape[0],z_dim).cuda()
+      suf_z_prev = suf_z
+      
+    suf_z = z_given_uy(suf_z_prev,data_t,rbm)
+    p_y = clamped_sampling(data_t,suf_z,rbm,k=25)
+    recon.append(p_y[0])
     
-    p_y = clamped_sampling(data_t,u_data_t,rbm,k=25)
-    loss = ((p_y - train_data[:,t+1])**2).mean().item()
-    loss_0thOrder = ((train_data[:,t] - train_data[:,t+1])**2).mean().item()
-    loss_list.append(loss)
-    loss_0thOrder_list.append(loss_0thOrder)
-    suf_z = z_given_uy(u_data_t,data_t,rbm)
-  
+  recon = torch.stack(recon)
+  return ((recon - train_data[:,1:])**2).mean().item(), ((train_data[:,:-1] - train_data[:,1:])**2).mean().item()
   loss_list = np.array(loss_list)
   loss_0thOrder_list = np.array(loss_0thOrder_list)
   print("model loss = ",loss_list.mean(),"0th Order Model loss =",loss_0thOrder_list.mean())
-  return loss_list.mean()
+  return loss_list.mean(), loss_0thOrder_list.mean()
+    
     
     
     
 def Energy(u,y,z,rbm):
 
     energy = torch.einsum("ij,bj->bi",[rbm.W_yz,y]) + torch.einsum("ij,bj->bi",[rbm.W_uz,u]) + rbm.b_z
-    energy = (z * energy).sum(axis=1) + (rbm.b_y * y).sum(axis=1) + (rbm.b_u * u).sum(axis=1)
+    energy = (z * energy).sum(axis=1) + (rbm.b_y * y).sum(axis=1) 
 
     return energy
 

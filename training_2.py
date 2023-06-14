@@ -15,12 +15,12 @@ from neural_models.probabilistic_population_codes import LTIPPCs
 
 
 def update_function(p, grad, loss, epoch,i):
-
   global mdot 
-  MaxEpoch = 10000
+  epoch = epoch//400
+  MaxEpoch = 500
   Ts = 0.01
-  m0 = 2000
-  b0 = 16000
+  m0 = 20000
+  b0 = 160000
   m = (m0*(Ts**2))/(1-(epoch-1)/MaxEpoch)
   b = (b0*(Ts**2))/(1-(epoch-1)/MaxEpoch)
   mm = m/Ts
@@ -30,30 +30,42 @@ def update_function(p, grad, loss, epoch,i):
   return p + Ts*mdot[i]
 
 ################### Hyperparameters #############################
-repo = "results_RTRBM/"   #Path to folder where all results will be saved
-epochs = 10000
-T = 1000
+repo = "results_RTRBM_Makin/"   #Path to folder where all results will be saved
+epochs = 200000
+T = 100
 CD = 25  # No of CD steps 
 MODEL = "TRBM" 
 dataset = "BouncingBall"
-z_dim = 625
+z_dim = 400
 y_dim = 900
-OPTIM = "Adam"
-lr = 1e-3  ## Use 1e-4 if dataset is BouncingBall and 1e-3 if dataset is PPC
+OPTIM = "Makin"
+lr = 5e-4  ## Use 1e-4 if dataset is BouncingBall and 1e-3 if dataset is PPC
 BatchIsTrajectory = 1
 num_trajectories = 1 # No of trajectories in training data, 
                      # If BatchIsTrajectory = 1, set num_trajectories = 1
-BPTT = True # If True, use BPTT, else without BPTT
+BPTT = True  # If True, use BPTT, else without BPTT
              # If BPTT is True make sure BatchIsTrajectory = 1
 #################################################################
 
+def printf(*content,folder_path = repo + 'output.txt'):
+    res = ''
+    for i in content:
+
+      res = res + ' ' +str(i)
+    f= open(folder_path,"a")
+    f.write(f'{res}\n')
+    f.close()
+
+################################################################
 if dataset == "PPC":
   rbm = model_2.RBM(y_dim=15, u_dim=z_dim, z_dim=z_dim).cuda()
 elif dataset == "BouncingBall":
-  rbm = model_2.RBM(y_dim=30*30, u_dim=z_dim, z_dim=z_dim).cuda()
+  #rbm = model_2.RBM(y_dim=30*30, u_dim=z_dim, z_dim=z_dim).float().cuda()
+  rbm = torch.load("rbm.pth")
   
 if OPTIM == "Adam":
   optimizer = optim.Adam(rbm.parameters(),lr=lr)
+  #optimizer = optim.SGD(rbm.parameters(),lr=1e-2,momentum=0.9)
 elif OPTIM == "Makin":
   mdot = [torch.zeros_like(p) for p in rbm.parameters()]
   
@@ -61,11 +73,13 @@ if dataset == "PPC":
   PPCs = LTIPPCs()
 
 error = [] 
-for epoch in tqdm(range(epochs)):
+print("Training Starting ....")
+for epoch in tqdm(range(0,epochs)):
   
   if dataset == "BouncingBall":
-    train_data = generate(T = T, N = num_trajectories) 
-    train_data = torch.from_numpy(train_data).float().cuda()
+    if epoch%5==0:
+      train_data = generate(T = T, N = num_trajectories) 
+      train_data = torch.from_numpy(train_data).float().cuda()
  
   
   elif dataset == "PPC":
@@ -73,7 +87,7 @@ for epoch in tqdm(range(epochs)):
     X = PPCs.latent_state
     train_data = torch.from_numpy(train_data).float().cuda()
   
-  print("epoch = ",epoch,"Done Generating Data ....")
+  #print("epoch = ",epoch,"Done Generating Data ....")
   
   u_data = []
   recon = []
@@ -98,7 +112,7 @@ for epoch in tqdm(range(epochs)):
         u_data.append(u_data_t)
         
     else:
-      u_data_t = torch.zeros(data_t.shape[0],z_dim).cuda()
+      u_data_t = torch.zeros(data_t.shape[0],z_dim).float().cuda()
       u_data.append(u_data_t)
 
     if BatchIsTrajectory == 0:
@@ -106,14 +120,13 @@ for epoch in tqdm(range(epochs)):
       y_0,u_0,z_0,y_1,u_1,z_1,suf_z = model_2.sample(data_t,u_data_t,rbm,dataset, k=CD, MODEL = MODEL)
       loss = model_2.Energy(u_data_t,data_t,suf_z,rbm) - model_2.Energy(u_data_t,y_1,z_1,rbm)
       loss = -loss.sum()
-      optimizer.zero_grad()
-      loss.backward()
-      
+        
       if OPTIM == "Adam": 
+        optimizer.zero_grad()
+        loss.backward()
         optimizer.step()
         
       elif OPTIM == "Makin":
-        
         rbm.zero_grad()
         loss.backward()
         with torch.no_grad():
@@ -131,25 +144,35 @@ for epoch in tqdm(range(epochs)):
     data = train_data.view(-1,y_dim)
     #print(u_data.requires_grad)
     y_0,u_0,z_0,y_1,u_1,z_1,suf_z = model_2.sample(data,u_data,rbm,dataset, k=CD, MODEL = MODEL)
+    grad_Wyz_2 = (torch.einsum("bi,bj->bij",[suf_z,data]).sum(axis=0) - torch.einsum("bi,bj->bij",[z_1,y_1]).sum(axis=0))
+    grad_Wuz_2 = (torch.einsum("bi,bj->bij",[suf_z,u_data]).sum(axis=0) - torch.einsum("bi,bj->bij",[z_1,u_data]).sum(axis=0))
     loss = model_2.Energy(u_data,data,suf_z,rbm) - model_2.Energy(u_data,y_1,z_1,rbm)
     loss = -loss.sum()
     #print("epoch = ",epoch,"loss = ",loss,rbm.W_yz.mean().item(),rbm.W_uz.mean().item())
-    optimizer.zero_grad()
-    loss.backward()
     #print("epoch = ",epoch,"grad = ",rbm.W_yz.grad.mean().item(),rbm.W_uz.grad.mean().item())
     #print("epoch = ",epoch,rbm.b_u.grad.mean().item(), rbm.b_y.grad.mean().item(), rbm.b_z.grad.mean().item())
-    """
-    for group in optimizer.param_groups:
-      for param in group['params']:
-          state = optimizer.state[param]
-          if state:
-            first_moment = state['exp_avg']
-            second_moment = state['exp_avg_sq']
-            #print("Parameter:", param)
-            print("First Moment (mean):", abs(first_moment).mean())
-            print("Second Moment (variance):", abs(second_moment).mean())
-          """
-    optimizer.step()
+   
+    if OPTIM == "Adam": 
+      optimizer.zero_grad()
+      loss.backward()
+      #torch.nn.utils.clip_grad_norm_(rbm.parameters(), max_norm=10)
+      optimizer.step()
+      
+      #print("epoch = ",epoch,"loss = ",loss.item(),u_data.mean())
+      #print("epoch = ",epoch,"grad = ",rbm.W_yz.grad.mean().item(),"grad_2 = ",grad_Wyz_2.mean().item())
+      #print("epoch = ",epoch,"grad = ",rbm.W_uz.grad.mean().item(),"grad_2 = ",grad_Wuz_2.mean().item())
+      #print("epoch = ",epoch, rbm.b_y.grad.mean().item(), rbm.b_z.grad.mean().item())
+     
+    elif OPTIM == "Makin":
+      rbm.zero_grad()
+      loss.backward()
+      #print("epoch = ",epoch,"loss = ",loss.item(),u_data.mean())
+      #print("epoch = ",epoch,"grad = ",rbm.W_yz.grad.mean().item(),rbm.W_uz.grad.mean().item())
+      #print("epoch = ",epoch, rbm.b_y.grad.mean().item(), rbm.b_z.grad.mean().item())
+      with torch.no_grad():
+        for i, p in enumerate(rbm.parameters()):
+          new_val = update_function(p, p.grad, loss, epoch,i)
+          p.copy_(new_val)
     #print("epoch = ",epoch,"loss = ",loss.item(),rbm.W_yz.mean().item(),rbm.W_uz.mean().item())
     recon = model_2.y_given_z(suf_z,rbm).detach().cpu().numpy()
     
@@ -157,9 +180,11 @@ for epoch in tqdm(range(epochs)):
     images = [(255*recon[i]).reshape(30,30).astype('uint8') for i in range(len(recon))]
     imgs = [Image.fromarray(img) for img in images]
     #imgs[0].save(f"results/array_recon{epoch//10}.gif", save_all=True, append_images=imgs[1:], loop=0)
-    if epoch%100==0:
+    if epoch%1000==0:
       imgs[0].save(repo + f"array_recon{epoch}.gif", save_all=True, append_images=imgs[1:], loop=0)
-      model_2.predict(train_data,z_dim,rbm)
+      e1,e2 = model_2.predict(train_data,z_dim,rbm)
+      print("epoch = ",epoch,"model loss = ",e1,"0th Order Model loss =",e2)
+      #torch.save(rbm,"rbm.pth")
     
   if dataset == "PPC":
     recon = np.array(recon)
